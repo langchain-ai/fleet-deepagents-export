@@ -1,0 +1,23 @@
+{
+  "tools": [
+    {
+      "name": "gmail_read_emails",
+      "mcp_server_url": "https://tools.langchain.com",
+      "mcp_server_name": "Fleet",
+      "display_name": "gmail_read_emails"
+    },
+    {
+      "name": "notion-search",
+      "mcp_server_url": "https://mcp.notion.com/mcp",
+      "mcp_server_name": "Notion",
+      "display_name": "notion-search"
+    },
+    {
+      "name": "Github_CountStargazers",
+      "mcp_server_url": "https://api.arcade.dev/mcp/gw_3BoDH1BuH5PLBNGnsrs7hhQLUXu",
+      "mcp_server_name": "github-gateway",
+      "display_name": "Github_CountStargazers"
+    }
+  ],
+  "interrupt_config": {}
+}

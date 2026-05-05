@@ -1,0 +1,16 @@
+{
+  "name": "Notion & Gmail & Github Demo",
+  "description": "A simple demo agent for testing Notion and Gmail tool functionality. Can read and send emails via Gmail, and interact with Notion pages and databases.",
+  "config": {
+    "configurable": {
+      "llm_model_config": {
+        "modelId": "anthropic:claude-sonnet-4-6"
+      },
+      "triggers_paused": false,
+      "tools_url": "https://tools.langchain.com",
+      "backend_type": "default",
+      "skip_memory_write_protection": false,
+      "visibility_scope": "user"
+    }
+  }
+}

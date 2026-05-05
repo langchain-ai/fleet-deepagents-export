@@ -1,0 +1,29 @@
+[project]
+name = "fleet-deepagent-export"
+version = "0.1.0"
+description = "Run Fleet-exported agents as standalone deepagents projects"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "deepagents>=0.3.9",
+  "httpx>=0.27.0",
+  "langchain-mcp-adapters>=0.2.0",
+  "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
