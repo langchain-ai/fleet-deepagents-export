@@ -6,8 +6,8 @@ dependencies = [
     "fleet-deepagent-export @ git+https://github.com/langchain-ai/fleet-deepagent-export.git",
     "langgraph>=1.0.2",
     "langgraph-cli[inmem]>=0.1.60",
-    "langgraph-sdk>=0.1.60",
-    "langchain-anthropic>=1.0.0",
+    "langgraph-sdk>=0.3.14",
+    "langchain-anthropic>=1.4.3",
     "langchain-openai>=1.0.0",
     "langchain-google-genai>=3.0.0",
 ]
