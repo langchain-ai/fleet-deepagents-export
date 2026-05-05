@@ -12,7 +12,7 @@ Runtime support for agents exported from LangSmith Fleet. Reads the export confi
    ```
 2. Export your agent from LangSmith Fleet (the `.zip`), then drop the contents into `fleet/`:
    ```bash
-   unzip ~/Downloads/my-export.zip -d fleet/
+   unzip path/to/my-export.zip -d fleet/
    ```
 3. Fill in `.env`:
    ```bash
@@ -28,7 +28,7 @@ Runtime support for agents exported from LangSmith Fleet. Reads the export confi
 
 Re-exporting from Fleet later? Wipe and re-unzip — the rest of your project is untouched:
 ```bash
-rm -rf fleet && unzip ~/Downloads/my-new-export.zip -d fleet/
+rm -rf fleet && unzip path/to/my-new-export.zip -d fleet/
 ```
 
 ## What's editable in the starter
