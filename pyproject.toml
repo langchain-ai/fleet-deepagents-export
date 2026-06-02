@@ -1,8 +1,11 @@
 [project]
-name = "fleet-deepagent-export"
-version = "0.1.0"
+name = "fleet-deepagents-export"
+version = "0.0.1"
 description = "Run Fleet-exported agents as standalone deepagents projects"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Brace Sproul", email = "brace@langchain.dev" }]
+urls = { Homepage = "https://github.com/langchain-ai/fleet-deepagents-export" }
 requires-python = ">=3.11"
 dependencies = [
   "deepagents>=0.6.7",

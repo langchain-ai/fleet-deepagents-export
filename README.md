@@ -1,8 +1,14 @@
-# fleet-deepagent-export
+# fleet-deepagents-export
 
 Runtime support for agents exported from LangSmith Fleet. Reads the export config and wires up a deepagent with MCP tools, subagents, and skills.
 
-**This package is usually consumed via [`examples/template-agent/`](examples/template-agent) — a drop-in starter project that imports it. Copy that directory, drop your Fleet export into `fleet/`, and run.**
+Published on PyPI as [`fleet-deepagents-export`](https://pypi.org/project/fleet-deepagents-export/):
+
+```bas
+pip install fleet-deepagents-export
+```
+
+**This package is usually consumed via [`examples/template-agent/`](examples/template-agent) — a drop-in starter project that depends on it. Copy that directory, drop your Fleet export into `fleet/`, and run.**
 
 ## Quickstart
 
@@ -10,11 +16,12 @@ Requires [`uv`](https://docs.astral.sh/uv/getting-started/installation/) and Pyt
 
 > Working with a coding agent (Claude Code, Cursor, etc.)? Point it at this repo and your `.zip` and ask it to set up the starter — the IDs it needs for `.env` are all in `fleet/config.json` after unzipping.
 
-1. Clone this repo and copy the starter out of it:
+1. Grab the starter (it pulls `fleet-deepagents-export` from PyPI as a normal dependency):
    ```bash
-   git clone https://github.com/langchain-ai/fleet-deepagent-export.git
-   cp -R fleet-deepagent-export/examples/template-agent my-agent && cd my-agent
+   git clone --depth 1 https://github.com/langchain-ai/fleet-deepagents-export.git
+   cp -R fleet-deepagents-export/examples/template-agent my-agent && cd my-agent
    ```
+   Or, if you'd rather wire things up by hand, `pip install fleet-deepagents-export` into your own project and follow the layout described under [What the package reads](#what-the-package-reads).
 2. Export your agent from LangSmith Fleet (the `.zip`), then drop the contents into `fleet/` (which ships empty apart from a placeholder README):
    ```bash
    unzip path/to/my-export.zip -d fleet/
