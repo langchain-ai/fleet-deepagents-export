@@ -1,4 +1,4 @@
-"""Minimal tests for fleet_deepagent_export.tools.
+"""Minimal tests for fleet_deepagents_export.tools.
 
 Covers pure helpers and the two public entry points (build_connections,
 fetch_tools) with the registry call and MCP client stubbed out. OAuth
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fleet_deepagent_export import tools as mod
+from fleet_deepagents_export import tools as mod
 
 
 # --- Pure helpers -----------------------------------------------------------

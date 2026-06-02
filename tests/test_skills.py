@@ -1,12 +1,12 @@
-"""Tests for fleet_deepagent_export.skills."""
+"""Tests for fleet_deepagents_export.skills."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from textwrap import dedent
 
-from fleet_deepagent_export import StaticSkillsLoader
-from fleet_deepagent_export.skills import _scan
+from fleet_deepagents_export import StaticSkillsLoader
+from fleet_deepagents_export.skills import _scan
 
 
 SKILL_MD = dedent(

@@ -23,7 +23,7 @@ load_dotenv()
 from custom_middleware import custom_middleware
 from custom_tools import custom_tools
 from deepagents import create_deep_agent
-from fleet_deepagent_export import StaticSkillsLoader, load_agent_components
+from fleet_deepagents_export import StaticSkillsLoader, load_agent_components
 
 PROJECT_DIR = Path(__file__).parent
 FLEET_DIR = PROJECT_DIR / "fleet"

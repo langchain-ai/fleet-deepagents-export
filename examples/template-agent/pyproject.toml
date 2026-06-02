@@ -3,7 +3,7 @@ name = "my-fleet-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "fleet-deepagent-export @ git+https://github.com/langchain-ai/fleet-deepagent-export.git",
+    "fleet-deepagents-export>=0.1.0",
     "langgraph>=1.0.2",
     "langgraph-cli[inmem]>=0.1.60",
     "langgraph-sdk>=0.1.60",

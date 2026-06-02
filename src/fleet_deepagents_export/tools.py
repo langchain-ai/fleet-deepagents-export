@@ -1,4 +1,4 @@
-"""MCP tool loader for fleet-deepagent-export.
+"""MCP tool loader for fleet-deepagents-export.
 
 Builds MCP server connections for tools listed in a Fleet export. Each
 tool's ``mcp_server_url`` is resolved against LangSmith's registry, and
