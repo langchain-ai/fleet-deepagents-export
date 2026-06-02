@@ -1,6 +1,6 @@
 [project]
 name = "fleet-deepagents-export"
-version = "0.1.0"
+version = "0.0.1"
 description = "Run Fleet-exported agents as standalone deepagents projects"
 readme = "README.md"
 license = { text = "MIT" }
