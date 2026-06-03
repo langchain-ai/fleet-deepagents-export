@@ -1,8 +1,9 @@
 """Minimal tests for fleet_deepagents_export.tools.
 
-Covers pure helpers and the two public entry points (build_connections,
-fetch_tools) with the registry call and MCP client stubbed out. OAuth
-flows are intentionally not covered here.
+Covers pure helpers and the public entry points (build_connections,
+fetch_server_tools, select_tools) with the registry call and MCP client
+stubbed out. The OAuth flow is covered for its interactive/non-interactive
+branching with httpx stubbed out.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ def clean_env(monkeypatch):
         "BUILTIN_MCP_URL",
         "LANGSMITH_HOST_URL",
         "HOST_LANGCHAIN_API_URL",
+        "FLEET_OAUTH_INTERACTIVE",
     ):
         monkeypatch.delenv(key, raising=False)
     return monkeypatch
@@ -194,7 +196,7 @@ async def test_build_connections_disambiguates_name_collisions(clean_env):
     assert urls == {"https://slack.a.com", "https://slack.b.com"}
 
 
-# --- fetch_tools ------------------------------------------------------------
+# --- fetch_server_tools / select_tools --------------------------------------
 
 
 class _FakeTool:
@@ -214,43 +216,149 @@ class _FakeClient:
         return list(self._by_server.get(server_name, []))
 
 
-async def test_fetch_tools_filters_by_name():
-    client = _FakeClient({"server_a": [_FakeTool("send"), _FakeTool("extra")]})
-    connections = {"server_a": {"url": "https://a.example.com"}}
-    entries = [{"name": "send", "mcp_server_url": "https://a.example.com"}]
-
-    tools = await mod.fetch_tools(client, connections, entries)
-    assert [t.name for t in tools] == ["send"]
-
-
-async def test_fetch_tools_does_not_leak_same_name_across_servers():
-    # Both servers expose "ping" but only server_a was asked for it.
+async def test_fetch_server_tools_fetches_each_server_once():
     client = _FakeClient(
         {
-            "server_a": [_FakeTool("ping")],
-            "server_b": [_FakeTool("ping")],
+            "server_a": [_FakeTool("a1")],
+            "server_b": [_FakeTool("b1")],
         }
     )
     connections = {
         "server_a": {"url": "https://a.example.com"},
         "server_b": {"url": "https://b.example.com"},
     }
+
+    server_tools = await mod.fetch_server_tools(client, connections)
+
+    # Each server is fetched exactly once (no per-consumer re-fetch).
+    assert sorted(client.calls) == ["server_a", "server_b"]
+    assert [t.name for t in server_tools["server_a"]] == ["a1"]
+    assert [t.name for t in server_tools["server_b"]] == ["b1"]
+
+
+def test_select_tools_filters_by_name():
+    server_tools = {"server_a": [_FakeTool("send"), _FakeTool("extra")]}
+    connections = {"server_a": {"url": "https://a.example.com"}}
+    entries = [{"name": "send", "mcp_server_url": "https://a.example.com"}]
+
+    tools = mod.select_tools(server_tools, connections, entries)
+    assert [t.name for t in tools] == ["send"]
+
+
+def test_select_tools_does_not_leak_same_name_across_servers():
+    # Both servers expose "ping" but only server_a was asked for it.
+    server_tools = {
+        "server_a": [_FakeTool("ping")],
+        "server_b": [_FakeTool("ping")],
+    }
+    connections = {
+        "server_a": {"url": "https://a.example.com"},
+        "server_b": {"url": "https://b.example.com"},
+    }
     entries = [{"name": "ping", "mcp_server_url": "https://a.example.com"}]
 
-    tools = await mod.fetch_tools(client, connections, entries)
+    tools = mod.select_tools(server_tools, connections, entries)
     assert len(tools) == 1
-    assert client.calls == ["server_a"]
 
 
-async def test_fetch_tools_routes_builtin_host_url(monkeypatch):
+def test_select_tools_routes_builtin_host_url(monkeypatch):
     # Builtin entries list the bare host; the connection URL includes /mcp.
-    # fetch_tools must bridge the gap via _is_builtin_server().
+    # select_tools must bridge the gap via _is_builtin_server().
     monkeypatch.setenv("BUILTIN_MCP_URL", "https://tools.langchain.com/mcp")
-    client = _FakeClient(
-        {"langsmith-tools": [_FakeTool("gmail.send"), _FakeTool("gmail.search")]}
-    )
+    server_tools = {
+        "langsmith-tools": [_FakeTool("gmail.send"), _FakeTool("gmail.search")]
+    }
     connections = {"langsmith-tools": {"url": "https://tools.langchain.com/mcp"}}
     entries = [{"name": "gmail.send", "mcp_server_url": "https://tools.langchain.com"}]
 
-    tools = await mod.fetch_tools(client, connections, entries)
+    tools = mod.select_tools(server_tools, connections, entries)
     assert [t.name for t in tools] == ["gmail.send"]
+
+
+# --- _get_oauth_token (interactive vs headless) -----------------------------
+
+
+class _FakeResp:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHTTPClient:
+    """Async-context stub for httpx.AsyncClient returning queued payloads."""
+
+    def __init__(self, payloads: list[dict]):
+        self._payloads = list(payloads)
+        self.post_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, *args, **kwargs):
+        self.post_calls += 1
+        idx = min(self.post_calls - 1, len(self._payloads) - 1)
+        return _FakeResp(self._payloads[idx])
+
+
+def _patch_httpx(monkeypatch, payloads: list[dict]):
+    monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **k: _FakeHTTPClient(payloads))
+
+
+async def test_get_oauth_token_non_interactive_skips_browser(clean_env):
+    clean_env.setenv("LANGSMITH_API_KEY", "k")
+    clean_env.setenv("LANGSMITH_USER_ID", "u")
+    _patch_httpx(clean_env, [{"status": "pending", "url": "https://consent"}])
+
+    opened: list[str] = []
+    clean_env.setattr(mod.webbrowser, "open", lambda url: opened.append(url))
+
+    async def _no_sleep(*a, **k):
+        raise AssertionError("non-interactive OAuth must not sleep/poll")
+
+    clean_env.setattr(mod.asyncio, "sleep", _no_sleep)
+
+    token = await mod._get_oauth_token("prov")
+    assert token is None
+    assert opened == []  # no browser in headless/default mode
+
+
+async def test_get_oauth_token_returns_already_provisioned_token(clean_env):
+    clean_env.setenv("LANGSMITH_API_KEY", "k")
+    clean_env.setenv("LANGSMITH_USER_ID", "u")
+    _patch_httpx(clean_env, [{"status": "completed", "token": "T"}])
+
+    assert await mod._get_oauth_token("prov") == "T"
+
+
+async def test_get_oauth_token_interactive_opens_browser_then_polls(clean_env):
+    clean_env.setenv("LANGSMITH_API_KEY", "k")
+    clean_env.setenv("LANGSMITH_USER_ID", "u")
+    clean_env.setenv("FLEET_OAUTH_INTERACTIVE", "1")
+    _patch_httpx(
+        clean_env,
+        [
+            {"status": "pending", "url": "https://consent"},
+            {"status": "completed", "token": "T"},
+        ],
+    )
+
+    opened: list[str] = []
+    clean_env.setattr(mod.webbrowser, "open", lambda url: opened.append(url))
+
+    async def _fast_sleep(*a, **k):
+        return None
+
+    clean_env.setattr(mod.asyncio, "sleep", _fast_sleep)
+
+    token = await mod._get_oauth_token("prov")
+    assert token == "T"
+    assert opened == ["https://consent"]  # browser flow runs only when opted in
+
