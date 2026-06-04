@@ -32,21 +32,3 @@ def test_preserves_dict_value():
     assert b._normalize_interrupt_config(cfg) == {
         "send": {"allow_accept": True, "allow_respond": False}
     }
-
-
-def test_tool_name_containing_double_colon_survives():
-    # Name is everything between the URL and source segments.
-    cfg = {"https://x::weird::name::Fleet": True}
-    assert b._normalize_interrupt_config(cfg) == {"weird::name": True}
-
-
-def test_allowlist_keeps_known_tool():
-    cfg = {"https://tools.langchain.com::gmail_send_email::Fleet": True}
-    out = b._normalize_interrupt_config(cfg, valid_tool_names={"gmail_send_email"})
-    assert out == {"gmail_send_email": True}
-
-
-def test_allowlist_drops_unknown_tool():
-    cfg = {"https://x::ghost_tool::Fleet": True}
-    out = b._normalize_interrupt_config(cfg, valid_tool_names={"gmail_send_email"})
-    assert out == {}

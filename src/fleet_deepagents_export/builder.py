@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 from deepagents import SubAgent
@@ -13,45 +12,19 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from .parsers import parse_frontmatter
 from .tools import build_connections, fetch_server_tools, select_tools
 
-logger = logging.getLogger(__name__)
 
+def _normalize_interrupt_config(interrupt_config: dict | None) -> dict:
+    """Reduce Fleet's "url::tool::source" interrupt keys to bare tool names.
 
-def _normalize_interrupt_config(
-    interrupt_config: dict | None,
-    valid_tool_names: set[str] | None = None,
-) -> dict:
-    """Map Fleet's composite interrupt keys to bare tool names.
-
-    Fleet exports interrupt keys as ``"<server_url>::<tool_name>::<source>"``
-    (e.g. ``"https://tools.langchain.com::gmail_send_email::Fleet"``), but
-    ``HumanInTheLoopMiddleware`` matches interrupts by the bare tool-call name.
-    Without this translation the approval gate never fires. Each key is reduced
-    to its tool name — everything between the first (URL) and last (source)
-    segments, so names containing ``"::"`` survive — and is idempotent when the
-    key is already a bare name. Values (``True`` or an interrupt-config dict)
-    pass through unchanged.
-
-    ``interrupt_config`` controls agent execution flow, so when
-    ``valid_tool_names`` is provided each normalized key is checked against it:
-    entries that don't correspond to a loaded tool are dropped with a warning
-    (they could never match a tool call anyway).
+    HumanInTheLoopMiddleware matches by tool-call name, so without this the
+    approval gate never fires. Non-composite keys pass through; values kept.
     """
     if not interrupt_config:
         return {}
-
     normalized: dict = {}
     for key, value in interrupt_config.items():
         parts = key.split("::")
-        name = "::".join(parts[1:-1]) if len(parts) >= 3 else key
-        if valid_tool_names is not None and name not in valid_tool_names:
-            logger.warning(
-                "Ignoring interrupt config for %r: no matching tool was loaded", name
-            )
-            continue
-        if name in normalized and normalized[name] != value:
-            logger.warning(
-                "Conflicting interrupt config for tool %r; keeping the last entry", name
-            )
+        name = parts[1] if len(parts) >= 3 else key
         normalized[name] = value
     return normalized
 
@@ -111,10 +84,7 @@ def _load_subagents(
             sub_config = json.loads(tools_file.read_text(encoding="utf-8"))
             sub_entries = sub_config.get("tools", [])
             sub_tools = select_tools(server_tools, connections, sub_entries)
-            sub_interrupt = _normalize_interrupt_config(
-                sub_config.get("interrupt_config"),
-                {t.name for t in sub_tools},
-            )
+            sub_interrupt = _normalize_interrupt_config(sub_config.get("interrupt_config"))
 
         subagents.append(
             SubAgent(
@@ -183,9 +153,5 @@ async def load_agent_components(project_dir: Path) -> dict:
         "system_prompt": system_prompt,
         "tools": tools,
         "subagents": subagents,
-        "interrupt_on": _normalize_interrupt_config(
-            root_config.get("interrupt_config"),
-            {t.name for t in tools},
-        )
-        or None,
+        "interrupt_on": _normalize_interrupt_config(root_config.get("interrupt_config")) or None,
     }

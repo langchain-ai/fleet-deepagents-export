@@ -64,10 +64,8 @@ async def build_connections(tool_entries: list[dict]) -> dict[str, dict]:
             if norm:
                 registry_by_url[norm] = server
 
-    # Resolve all URLs concurrently — total latency is bounded by the slowest
-    # server, not the sum. ``asyncio.gather`` preserves input order and
-    # ``unique_urls`` has stable insertion order, so the disambiguation counter
-    # below stays deterministic.
+    # Resolve all URLs concurrently; gather preserves order, so the
+    # disambiguation counter below stays deterministic.
     items = list(unique_urls.items())
     resolved = await asyncio.gather(
         *(

@@ -40,12 +40,10 @@ _SKILL_LOADER = StaticSkillsLoader(
     ]
 )
 
-# LangGraph re-invokes this module's ``graph`` factory on *every* run (Studio
-# message, deployment request), so without caching every run would re-resolve
-# MCP connections and re-fetch tools. Build the components once per process and
-# reuse them for FLEET_COMPONENTS_TTL seconds. OAuth tokens are baked into
-# connection headers at build time, so the TTL bounds how stale they can get;
-# set it to 0 to disable caching and rebuild every run.
+# LangGraph re-invokes this factory every run, so cache the built components
+# per process for FLEET_COMPONENTS_TTL seconds (0 disables). The TTL also bounds
+# OAuth-token staleness: tokens are baked into connection headers at build time,
+# so the cache must refresh before they expire.
 _COMPONENTS_CACHE: dict | None = None
 _COMPONENTS_AT: float = 0.0
 _COMPONENTS_LOCK = asyncio.Lock()
@@ -59,12 +57,9 @@ def _cache_ttl() -> float:
 
 
 async def _get_components() -> dict:
-    """Return cached agent components, rebuilding when the TTL has elapsed.
+    """Return cached components, rebuilding when the TTL has elapsed.
 
-    Double-checked locking: the fast path avoids the lock on cache hits; under
-    concurrent runs only one coroutine rebuilds. The cache is updated only on a
-    successful build, so a failed load leaves the previous components intact and
-    propagates the error rather than caching a partial result.
+    Double-checked lock so concurrent runs rebuild once; caches only on success.
     """
     global _COMPONENTS_CACHE, _COMPONENTS_AT
     ttl = _cache_ttl()
@@ -82,8 +77,7 @@ async def _get_components() -> dict:
 
 async def graph(runtime: Any):
     """Build and return the agent graph."""
-    # Shallow-copy the cached dict: graph() mutates it (pops "model", rebuilds
-    # "tools"), and the cache must stay pristine for the next run.
+    # Copy: graph() mutates the dict (pops model, rebuilds tools); keep cache clean.
     components = dict(await _get_components())
     model = components.pop("model")  # from fleet/config.json; replace to override
     components["tools"] = list(components["tools"]) + list(custom_tools)
