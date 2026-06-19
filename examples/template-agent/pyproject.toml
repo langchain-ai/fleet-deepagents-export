@@ -7,7 +7,7 @@ dependencies = [
     "langgraph>=1.2.4",
     "langgraph-cli[inmem]>=0.4.27",
     "langgraph-sdk>=0.1.60",
-    "langchain-anthropic>=1.4.4",
+    "langchain-anthropic>=1.4.6",
     "langchain-openai>=1.2.2",
     "langchain-google-genai>=4.2.4",
 ]
