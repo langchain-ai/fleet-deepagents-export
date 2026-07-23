@@ -10,7 +10,23 @@ from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from .parsers import parse_frontmatter
-from .tools import build_connections, fetch_tools
+from .tools import build_connections, fetch_server_tools, select_tools
+
+
+def _normalize_interrupt_config(interrupt_config: dict | None) -> dict:
+    """Reduce Fleet's "url::tool::source" interrupt keys to bare tool names.
+
+    HumanInTheLoopMiddleware matches by tool-call name, so without this the
+    approval gate never fires. Non-composite keys pass through; values kept.
+    """
+    if not interrupt_config:
+        return {}
+    normalized: dict = {}
+    for key, value in interrupt_config.items():
+        parts = key.split("::")
+        name = parts[1] if len(parts) >= 3 else key
+        normalized[name] = value
+    return normalized
 
 
 def _load_all_tool_entries(project_dir: Path) -> tuple[dict, list[dict]]:
@@ -35,12 +51,16 @@ def _load_all_tool_entries(project_dir: Path) -> tuple[dict, list[dict]]:
     return root_config, entries
 
 
-async def _load_subagents(
+def _load_subagents(
     project_dir: Path,
-    client: MultiServerMCPClient,
+    server_tools: dict[str, list],
     connections: dict[str, dict],
 ) -> list[SubAgent]:
-    """Load subagent definitions, fetching tools from the shared client."""
+    """Load subagent definitions, selecting tools from pre-fetched server tools.
+
+    Pure in-memory filtering — no MCP I/O — so a server shared by the root
+    agent and several subagents is fetched only once (see ``fetch_server_tools``).
+    """
     subagents_dir = project_dir / "subagents"
     if not subagents_dir.exists() or not subagents_dir.is_dir():
         return []
@@ -63,8 +83,8 @@ async def _load_subagents(
         if tools_file.exists():
             sub_config = json.loads(tools_file.read_text(encoding="utf-8"))
             sub_entries = sub_config.get("tools", [])
-            sub_tools = await fetch_tools(client, connections, sub_entries)
-            sub_interrupt = sub_config.get("interrupt_config", {})
+            sub_tools = select_tools(server_tools, connections, sub_entries)
+            sub_interrupt = _normalize_interrupt_config(sub_config.get("interrupt_config"))
 
         subagents.append(
             SubAgent(
@@ -106,7 +126,9 @@ async def load_agent_components(project_dir: Path) -> dict:
     - ``system_prompt``: str from AGENTS.md
     - ``tools``: list[BaseTool] from MCP servers
     - ``subagents``: list[SubAgent] from subagents/
-    - ``interrupt_on``: dict from tools.json interrupt_config
+    - ``interrupt_on``: dict from tools.json interrupt_config, keyed by tool name
+      (Fleet's ``url::tool::source`` keys are normalized so the human-in-the-loop
+      middleware matches them) — ``None`` when no tools require approval
 
     Skills and backend are *not* returned — the caller decides which
     directories to expose and how to scope filesystem access (e.g.
@@ -121,13 +143,15 @@ async def load_agent_components(project_dir: Path) -> dict:
 
     connections = await build_connections(all_entries)
     client = MultiServerMCPClient(connections)
-    tools = await fetch_tools(client, connections, root_config.get("tools", []))
-    subagents = await _load_subagents(project_dir, client, connections)
+    # Fetch each server's tools once (parallel), then filter per consumer.
+    server_tools = await fetch_server_tools(client, connections)
+    tools = select_tools(server_tools, connections, root_config.get("tools", []))
+    subagents = _load_subagents(project_dir, server_tools, connections)
 
     return {
         "model": model,
         "system_prompt": system_prompt,
         "tools": tools,
         "subagents": subagents,
-        "interrupt_on": root_config.get("interrupt_config"),
+        "interrupt_on": _normalize_interrupt_config(root_config.get("interrupt_config")) or None,
     }
