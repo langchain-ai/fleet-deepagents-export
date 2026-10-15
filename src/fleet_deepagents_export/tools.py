@@ -38,6 +38,10 @@ DEFAULT_LANGSMITH_HOST = "https://api.smith.langchain.com"
 DEFAULT_HOST_BACKEND_URL = "https://api.host.langchain.com"
 OAUTH_POLL_SECONDS = 120
 
+# Serializes the interactive browser/poll consent flow so concurrent
+# connection resolution can't open multiple consent tabs at once.
+_OAUTH_BROWSER_LOCK = asyncio.Lock()
+
 
 async def build_connections(tool_entries: list[dict]) -> dict[str, dict]:
     """Build MCP server connections by resolving each URL against LangSmith."""
@@ -60,9 +64,18 @@ async def build_connections(tool_entries: list[dict]) -> dict[str, dict]:
             if norm:
                 registry_by_url[norm] = server
 
+    # Resolve all URLs concurrently; gather preserves order, so the
+    # disambiguation counter below stays deterministic.
+    items = list(unique_urls.items())
+    resolved = await asyncio.gather(
+        *(
+            _connection_for(original_url, registry_by_url.get(norm_url))
+            for norm_url, original_url in items
+        )
+    )
+
     connections: dict[str, dict] = {}
-    for norm_url, original_url in unique_urls.items():
-        conn = await _connection_for(original_url, registry_by_url.get(norm_url))
+    for conn in resolved:
         if conn is None:
             continue
         name, spec = conn
@@ -80,15 +93,43 @@ async def build_connections(tool_entries: list[dict]) -> dict[str, dict]:
     return connections
 
 
-async def fetch_tools(
+async def fetch_server_tools(
     client: MultiServerMCPClient,
+    connections: dict[str, dict],
+) -> dict[str, list[BaseTool]]:
+    """Fetch every server's tools once, in parallel.
+
+    Each ``get_tools`` call opens a fresh MCP session, so fetching once per
+    server and filtering in memory (see ``select_tools``) avoids re-opening a
+    session for the root agent and every subagent that shares a server. Total
+    latency is bounded by the slowest server, not the sum.
+    """
+
+    async def _fetch(server_name: str) -> list[BaseTool]:
+        try:
+            tools = await client.get_tools(server_name=server_name)
+            logger.info("Loaded %d tools from %s", len(tools), server_name)
+            return tools
+        except Exception as exc:
+            logger.warning("Failed to load tools from %s: %s", server_name, type(exc).__name__)
+            return []
+
+    names = list(connections)
+    per_server = await asyncio.gather(*(_fetch(n) for n in names))
+    return dict(zip(names, per_server))
+
+
+def select_tools(
+    server_tools: dict[str, list[BaseTool]],
     connections: dict[str, dict],
     tool_entries: list[dict],
 ) -> list[BaseTool]:
-    """Fetch tools from a shared client, filtered by name AND server.
+    """Filter pre-fetched tools to those requested, by name AND server.
 
-    Prevents cross-server name collisions by only keeping tools whose name
-    was requested on the same server that produced them.
+    Pure (no I/O): reads from the ``server_tools`` map produced by
+    ``fetch_server_tools``. Prevents cross-server name collisions by only
+    keeping tools whose name was requested on the same server that produced
+    them.
     """
     url_to_name: dict[str, str] = {
         _normalize_url(conn.get("url")): name
@@ -108,25 +149,10 @@ async def fetch_tools(
         if conn_name:
             server_wanted.setdefault(conn_name, set()).add(entry["name"])
 
-    async def _fetch(server_name: str) -> list[BaseTool]:
-        try:
-            tools = await client.get_tools(server_name=server_name)
-            logger.info("Loaded %d tools from %s", len(tools), server_name)
-            return tools
-        except Exception as exc:
-            logger.warning("Failed to load tools from %s: %s", server_name, type(exc).__name__)
-            return []
-
-    # Fetch from all servers in parallel; total latency is bounded by the
-    # slowest server, not the sum.
-    server_names = list(server_wanted)
-    per_server_tools = await asyncio.gather(*(_fetch(n) for n in server_names))
-
     result: list[BaseTool] = []
-    for server_name, tools in zip(server_names, per_server_tools):
-        wanted = server_wanted[server_name]
+    for server_name, wanted in server_wanted.items():
+        tools = server_tools.get(server_name, [])
         result.extend(t for t in tools if t.name in wanted)
-
     return result
 
 
@@ -257,13 +283,23 @@ async def _register_oauth_provider(mcp_server_id: str) -> str | None:
 
 
 async def _get_oauth_token(provider_id: str) -> str | None:
-    """POST {host-backend}/v2/auth/authenticate — fetch or initiate an OAuth token.
+    """POST {host-backend}/v2/auth/authenticate — fetch an OAuth token.
 
     The OAuth broker lives on host-backend (``api.host.langchain.com``), not
-    smith-backend. If a token is already provisioned for this (provider,
-    user) pair, returns it immediately. If authorization is pending, opens
-    the consent URL in the user's browser and polls for completion for up
-    to ``OAUTH_POLL_SECONDS``. Returns None on failure.
+    smith-backend. If a token is already provisioned for this (provider, user)
+    pair, it is returned. Otherwise behavior depends on
+    ``FLEET_OAUTH_INTERACTIVE``:
+
+    - **non-interactive (default)**: makes a single request and, if the grant
+      is still pending, logs how to authorize and returns None. Safe for
+      headless deployments and LangGraph Studio — never opens a browser or
+      blocks.
+    - **interactive (opt-in)**: opens the consent URL in a browser and polls
+      for completion for up to ``OAUTH_POLL_SECONDS``. Intended for a one-time
+      local authorization from the CLI.
+
+    Returns None on failure; the caller then skips the server (fail-soft, so
+    one unprovisioned server never crashes agent startup).
     """
     api_key = os.environ.get("LANGSMITH_API_KEY", "")
     if not api_key:
@@ -284,28 +320,46 @@ async def _get_oauth_token(provider_id: str) -> str | None:
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            browser_opened = False
-            for attempt in range(OAUTH_POLL_SECONDS + 1):
-                if attempt > 0:
-                    await asyncio.sleep(1)
+            if not _oauth_interactive():
+                # Headless/default: one shot, no browser, no blocking.
                 resp = await client.post(endpoint, headers=headers, json=body)
                 resp.raise_for_status()
                 data = resp.json()
-
                 if data.get("status") == "completed":
                     return data.get("token")
-                if data.get("status") != "pending" or not data.get("url"):
-                    return None
+                logger.warning(
+                    "OAuth token not provisioned for provider %s. Authorize once "
+                    "locally with FLEET_OAUTH_INTERACTIVE=1 (e.g. via `make run`), "
+                    "then redeploy.",
+                    provider_id,
+                )
+                return None
 
-                if not browser_opened:
-                    logger.info("Opening browser to authorize OAuth for %s", provider_id)
-                    webbrowser.open(data["url"])
-                    browser_opened = True
+            # Interactive: serialize so parallel resolution opens at most one
+            # consent tab at a time.
+            async with _OAUTH_BROWSER_LOCK:
+                browser_opened = False
+                for attempt in range(OAUTH_POLL_SECONDS + 1):
+                    if attempt > 0:
+                        await asyncio.sleep(1)
+                    resp = await client.post(endpoint, headers=headers, json=body)
+                    resp.raise_for_status()
+                    data = resp.json()
 
-            logger.warning(
-                "OAuth authorization for %s timed out after %ds",
-                provider_id, OAUTH_POLL_SECONDS,
-            )
+                    if data.get("status") == "completed":
+                        return data.get("token")
+                    if data.get("status") != "pending" or not data.get("url"):
+                        return None
+
+                    if not browser_opened:
+                        logger.info("Opening browser to authorize OAuth for %s", provider_id)
+                        webbrowser.open(data["url"])
+                        browser_opened = True
+
+                logger.warning(
+                    "OAuth authorization for %s timed out after %ds",
+                    provider_id, OAUTH_POLL_SECONDS,
+                )
     except httpx.HTTPStatusError as exc:
         logger.warning(
             "OAuth token fetch failed for %s: HTTP %d",
@@ -326,6 +380,16 @@ def _langsmith_host() -> str:
 def _host_backend_url() -> str:
     """OAuth broker lives on host-backend, a separate service from smith-backend."""
     return os.environ.get("HOST_LANGCHAIN_API_URL", DEFAULT_HOST_BACKEND_URL).rstrip("/")
+
+
+def _oauth_interactive() -> bool:
+    """Whether to run the browser-based OAuth consent flow.
+
+    Off by default so deployments and LangGraph Studio never open a browser or
+    block on a 120s poll. Opt in with ``FLEET_OAUTH_INTERACTIVE=1`` for a
+    one-time local authorization from the CLI.
+    """
+    return os.environ.get("FLEET_OAUTH_INTERACTIVE", "").strip().lower() in ("1", "true", "yes")
 
 
 def _user_id() -> str:
